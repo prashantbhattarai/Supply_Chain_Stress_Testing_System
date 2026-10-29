@@ -1,20 +1,23 @@
+"""Supplier table cleaning shared by generation and learning examples."""
+import numpy as np
 import pandas as pd
 
+
 def clean_suppliers(df):
-    df = df.copy()
-    df.columns = df.columns.str.lower().str.replace(" ", "_")
-    df["lead_time"] = df["lead_time"].astype(float)
-    df["reliability"] = df["reliability"].astype(float)
-    return df
-
-# testing using a random dataframe
-
-data = {
-    "Supplier_ID": [1000, 3222, 3232],
-    "Lead time": [5, 7, 3],
-    "Reliability": [0.9, 0.8, 0.95]
-}
-
-df = pd.DataFrame(data)
-print("\nMessy Data:\n", df)
-print("\nCleaned Data:\n", clean_suppliers(df))
+    """Copy, normalize headers, and validate supplier IDs and numeric values."""
+    result = df.copy()
+    result.columns = [str(column).strip().lower().replace(" ", "_") for column in result.columns]
+    required = {"supplier_id", "lead_time", "reliability"}
+    if not required.issubset(result.columns):
+        raise ValueError("Suppliers need supplier_id, lead_time, and reliability")
+    if result["supplier_id"].isna().any() or result["supplier_id"].duplicated().any():
+        raise ValueError("Supplier IDs must be present and unique")
+    for column in ("lead_time", "reliability"):
+        result[column] = pd.to_numeric(result[column], errors="raise").astype(float)
+        if not np.isfinite(result[column]).all():
+            raise ValueError(f"{column} must contain finite numbers")
+    if (result["lead_time"] < 0).any():
+        raise ValueError("lead_time cannot be negative")
+    if not result["reliability"].between(0, 1).all():
+        raise ValueError("reliability must be between 0 and 1")
+    return result
