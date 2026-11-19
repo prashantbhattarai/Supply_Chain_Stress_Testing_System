@@ -1,0 +1,37 @@
+{
+  "network_id": "coastal-demo",
+  "version": 1,
+  "display_name": "Coastal supply network",
+  "nodes": [
+    {"node_id": 1, "display_name": "Cedar Components", "lead_time_days": 1, "reliability": 0.99},
+    {"node_id": 2, "display_name": "Maple Packaging", "lead_time_days": 2, "reliability": 0.98},
+    {"node_id": 3, "display_name": "West Consolidation", "lead_time_days": 0, "reliability": 0.98},
+    {"node_id": 4, "display_name": "Harbor Port", "lead_time_days": 0, "reliability": 0.94},
+    {"node_id": 5, "display_name": "East Rail Terminal", "lead_time_days": 0, "reliability": 0.98},
+    {"node_id": 6, "display_name": "Mountain Truck Hub", "lead_time_days": 0, "reliability": 0.97},
+    {"node_id": 7, "display_name": "Inland Transfer", "lead_time_days": 0, "reliability": 0.98},
+    {"node_id": 8, "display_name": "River Ferry Terminal", "lead_time_days": 0, "reliability": 0.96},
+    {"node_id": 9, "display_name": "City Distribution", "lead_time_days": 0, "reliability": 0.99},
+    {"node_id": 10, "display_name": "Metro Customer", "lead_time_days": 0, "reliability": 0.99},
+    {"node_id": 11, "display_name": "Valley Customer", "lead_time_days": 0, "reliability": 0.98}
+  ],
+  "routes": [
+    [1, 3, 3],
+    [2, 3, 4],
+    [3, 4, 4],
+    [4, 5, 5],
+    [5, 9, 4],
+    [3, 6, 12],
+    [6, 7, 14],
+    [7, 9, 8],
+    [3, 8, 6],
+    [9, 10, 2],
+    [9, 11, 3]
+  ],
+  "preset": {
+    "preset_id": "port-outage",
+    "shipment": {"origin_id": 1, "destination_id": 10, "deadline_hours": 50},
+    "disruption": {"node_id": 4},
+    "backup_routes": [[8, 9, 10]]
+  }
+}

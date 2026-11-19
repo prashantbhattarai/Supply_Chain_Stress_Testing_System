@@ -2,3 +2,15 @@ venv/
 *.pyc
 .DS_Store
 __pycache__/
+
+# Local backend data and virtual environments
+.venv/
+.venv-*/
+var/
+exports/
+*.sqlite
+*.sqlite3
+*.db
+*-wal
+*-shm
+*-journal
