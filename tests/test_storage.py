@@ -114,7 +114,7 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(reopened.get_network(snapshot.ref), snapshot)
             self.assertEqual(reopened.get_preset(snapshot.ref, preset.preset_id), preset)
         with closing(sqlite3.connect(self.path)) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone(), (2,))
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone(), (3,))
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_immutable_versions_and_preset_round_trip(self):
@@ -212,7 +212,7 @@ class StorageTests(unittest.TestCase):
                          replace(self.preset, preset_id="legacy-delay",
                                  scenario=replace(self.preset.scenario, disruption=EdgeDelay(3, 4, 5))))
         with self.repo._connection() as (connection, _):
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone(), (2,))
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone(), (3,))
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_foreign_database_is_preserved(self):

@@ -1,8 +1,10 @@
 """Immutable backend records and validation."""
 
+import hashlib
+import json
 import math
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Literal, Optional, Union
 
 
@@ -107,6 +109,12 @@ class NetworkSnapshot:
         object.__setattr__(self, "edges", tuple(sorted(self.edges, key=lambda edge: edge.endpoints)))
 
 
+def network_fingerprint(snapshot: NetworkSnapshot) -> str:
+    """SHA-256 of the canonical snapshot, including its identity and version."""
+    payload = json.dumps(asdict(snapshot), sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class Shipment:
     origin_id: int
@@ -206,8 +214,10 @@ class ScenarioPreset:
     network: NetworkRef
     shipment: Shipment
     scenario: Scenario
+    sigma: float = 0.15
 
     def __post_init__(self):
+        _number(self.sigma, "preset sigma", 1)
         _name(self.preset_id, "preset_id")
         _record(self.network, NetworkRef)
         _record(self.shipment, Shipment)
@@ -353,11 +363,65 @@ class Comparison:
 
 
 @dataclass(frozen=True)
+class CriticalityReport:
+    candidate_ids: tuple[int, ...]
+    trial_count: int
+    baseline_fragility: float
+    ranking: tuple[Criticality, ...]
+
+    def __post_init__(self):
+        _integer(self.trial_count, "sensitivity trial count", 1)
+        _number(self.baseline_fragility, "sensitivity baseline fragility", 100)
+        _records(self.ranking, Criticality)
+        if not isinstance(self.candidate_ids, tuple):
+            raise ValueError("Sensitivity candidates must be a tuple")
+        for node_id in self.candidate_ids:
+            _integer(node_id, "sensitivity candidate")
+        if sorted(self.candidate_ids) != sorted(item.node_id for item in self.ranking):
+            raise ValueError("Sensitivity ranking must cover the evaluated candidates")
+
+
+@dataclass(frozen=True)
+class RuntimeVersions:
+    python: str
+    numpy: str
+    pandas: str
+    networkx: str
+
+
+@dataclass(frozen=True)
+class RunDetails:
+    snapshot: NetworkSnapshot
+    fingerprint: str
+    preset_id: str
+    created_at_utc: str
+    versions: RuntimeVersions
+    code_revision: Optional[str]
+    code_dirty: Optional[bool]
+    trials: ConditionTrials
+    criticality: CriticalityReport
+    comparison_seconds: float
+    criticality_seconds: float
+
+    def __post_init__(self):
+        if self.fingerprint != network_fingerprint(self.snapshot):
+            raise ValueError("Stored network snapshot fingerprint does not match")
+        _name(self.preset_id, "preset_id")
+        _name(self.created_at_utc, "creation time")
+        _record(self.versions, RuntimeVersions)
+        _record(self.trials, ConditionTrials)
+        _record(self.criticality, CriticalityReport)
+        _number(self.comparison_seconds, "comparison seconds")
+        _number(self.criticality_seconds, "criticality seconds")
+
+
+@dataclass(frozen=True)
 class SavedRun:
     run_id: str
     network: NetworkRef
     settings: RunSettings
     result: Comparison
+    details: Optional[RunDetails] = None
 
     def __post_init__(self):
         _name(self.run_id, "run_id")
@@ -367,3 +431,11 @@ class SavedRun:
         if any(metrics.trial_count != self.settings.trials for metrics in
                (self.result.baseline, self.result.stressed, self.result.mitigated)):
             raise ValueError("Metrics trial counts must match run settings")
+        if self.details is not None:
+            _record(self.details, RunDetails)
+            if self.details.snapshot.ref != self.network:
+                raise ValueError("Run snapshot must match its network reference")
+            if len(self.details.trials.baseline) != self.settings.trials:
+                raise ValueError("Stored trial count must match run settings")
+            if self.details.criticality.ranking != self.result.node_criticality:
+                raise ValueError("Stored sensitivity ranking must match comparison")

@@ -12,8 +12,10 @@ from src.domain import (
     ScenarioPreset, Shipment, TransportSlowdown, validate_scenario,
 )
 
+from src.storage.run_details import decode_details
+
 APPLICATION_ID = 0x53435354
-MIGRATIONS = ("001_initial.sql", "002_disruptions.sql")
+MIGRATIONS = ("001_initial.sql", "002_disruptions.sql", "003_run_details.sql")
 
 
 def _shock_columns(shock):
@@ -155,18 +157,18 @@ class SQLiteRepository:
         key = (*self._network_key(ref), preset_id)
         row = connection.execute(
             "SELECT origin_id, destination_id, deadline_hours, disruption_kind, outage_node_id, "
-            "route_origin_id, route_destination_id, added_hours, slowdown_factor FROM scenario_presets "
+            "route_origin_id, route_destination_id, added_hours, slowdown_factor, sigma FROM scenario_presets "
             "WHERE network_id = ? AND version = ? AND preset_id = ?", key
         ).fetchone()
         if row is None:
             raise KeyError((ref, preset_id))
-        disruption = _shock_from_columns(*row[3:])
+        disruption = _shock_from_columns(*row[3:9])
         edges = connection.execute(
             "SELECT origin_id, destination_id, transit_hours FROM scenario_backup_routes "
             "WHERE network_id = ? AND version = ? AND preset_id = ? ORDER BY origin_id, destination_id", key
         )
         return ScenarioPreset(preset_id, ref, Shipment(*row[:3]),
-                              Scenario(disruption, tuple(Edge(*edge) for edge in edges)))
+                              Scenario(disruption, tuple(Edge(*edge) for edge in edges)), row[9])
 
     def _save_preset(self, connection, preset):
         snapshot = self._get_network(connection, preset.network)
@@ -177,9 +179,9 @@ class SQLiteRepository:
             key = (*self._network_key(preset.network), preset.preset_id)
             shipment = preset.shipment
             connection.execute(
-                "INSERT INTO scenario_presets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO scenario_presets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (*key, shipment.origin_id, shipment.destination_id, shipment.deadline_hours,
-                 *_shock_columns(preset.scenario.disruption)),
+                 *_shock_columns(preset.scenario.disruption), preset.sigma),
             )
             connection.executemany(
                 "INSERT INTO scenario_backup_routes VALUES (?, ?, ?, ?, ?, ?)",
@@ -210,6 +212,8 @@ class SQLiteRepository:
         with self._connection(write=True) as (connection, _):
             snapshot = self._get_network(connection, run.network)
             validate_scenario(snapshot, run.settings.shipment, run.settings.scenario)
+            if run.details is not None and run.details.snapshot != snapshot:
+                raise ValueError("Run snapshot does not match the saved network version")
             shipment = run.settings.shipment
             transit_ids = {node.node_id for node in snapshot.nodes} - {shipment.origin_id, shipment.destination_id}
             if any(item.node_id not in transit_ids for item in run.result.node_criticality):
@@ -223,11 +227,18 @@ class SQLiteRepository:
                 (run.run_id, json.dumps(asdict(run.result), allow_nan=False)),
             )
 
+            if run.details is not None:
+                connection.execute(
+                    "INSERT INTO run_details VALUES (?, ?)",
+                    (run.run_id, json.dumps(asdict(run.details), allow_nan=False)),
+                )
+
     def get_run(self, run_id: str) -> SavedRun:
         with self._connection() as (connection, _):
             row = connection.execute(
-                "SELECT network_id, version, settings_json, comparison_json "
-                "FROM runs JOIN run_results USING (run_id) WHERE run_id = ?", (run_id,)
+                "SELECT network_id, version, settings_json, comparison_json, details_json "
+                "FROM runs JOIN run_results USING (run_id) "
+                "LEFT JOIN run_details USING (run_id) WHERE run_id = ?", (run_id,)
             ).fetchone()
         if row is None:
             raise KeyError(run_id)
@@ -243,4 +254,5 @@ class SQLiteRepository:
             RiskMetrics(**result["mitigated"]),
             tuple(Criticality(**item) for item in result["node_criticality"]),
         )
-        return SavedRun(run_id, NetworkRef(*row[:2]), RunSettings(**settings), comparison)
+        details = decode_details(json.loads(row[4])) if row[4] is not None else None
+        return SavedRun(run_id, NetworkRef(*row[:2]), RunSettings(**settings), comparison, details)

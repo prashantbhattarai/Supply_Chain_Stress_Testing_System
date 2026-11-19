@@ -16,6 +16,7 @@
   ],
   "preset": {
     "preset_id": "port-outage",
+    "sigma": 0.15,
     "shipment": {"origin_id": 1, "destination_id": 4, "deadline_hours": 32},
     "disruption": {"node_id": 2},
     "backup_routes": [[1, 4, 8]]

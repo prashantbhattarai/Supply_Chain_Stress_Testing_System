@@ -44,7 +44,7 @@ The following are the field names and boundary signatures for later stages. Data
 | `Criticality` | `node_id: int, fragility_increase_points: float` |
 | `CriticalityReport` | `candidate_ids: tuple[int, ...], trial_count: int, baseline_fragility: float, ranking: tuple[Criticality, ...]` |
 | `Comparison` | `baseline: RiskMetrics, stressed: RiskMetrics, mitigated: RiskMetrics, node_criticality: tuple[Criticality, ...]`; `stress_impact` and `mitigation_improvement` are derived percentage-point changes. |
-| `SavedRun` | `run_id: str, network: NetworkRef, settings: RunSettings, result: Comparison` |
+| `SavedRun` | `run_id: str, network: NetworkRef, settings: RunSettings, result: Comparison, details: Optional[RunDetails]` |
 
 Map Phase 1 columns `supplier_id`, `lead_time`, `origin`, `destination`, and `time` to the corresponding typed fields. Snapshot nodes are unique and sorted by ID, and edges are unique and sorted by ordered endpoint pair. Collapse duplicate Phase 1 routes to their minimum transit time at the adapter boundary. Reject invalid or missing references, boolean IDs/counts, nonfinite numeric values, negative times, reliability outside [0, 1], and empty IDs or display names. Require positive versions and trial counts, a nonnegative seed and deadline, Monte Carlo sigma in [0, 1], and strictly positive delay. Require one or more new directed backup edges between existing nodes, without self-loops or duplicate pairs. Stage 2 validates snapshot membership and new backup edges via `validate_scenario`. When both shipment endpoints survive deterministic stress, Stage 3 requires a simple shipment path using at least one backup edge. When an endpoint is out, report the stressed and mitigated shipment as unserved. Backup edges incident to unavailable nodes are omitted in both cases. Invalid domain input raises `ValueError`. Missing stored records raise `KeyError`. An unserved `Delivery` has all three fields absent.
 
@@ -57,9 +57,9 @@ Map Phase 1 columns `supplier_id`, `lead_time`, `origin`, `destination`, and `ti
 | `src/graph/` | Reuse the existing graph builder and Dijkstra implementation. Adapt snapshots and expose `deterministic(network: NetworkSnapshot, shipment: Shipment, scenario: Scenario) -> ConditionTrials` with one delivery per condition. Apply outage by removing the node and incident edges, closure by removing the selected directed edge, slowdown by multiplying its transport hours by a finite factor of at least 1, and legacy delay by adding hours. Route baseline, stress and mitigation from independent graph copies. Use canonical node and edge order to make tie handling repeatable. |
 | `src/simulation/` | `simulate(network: NetworkSnapshot, settings: RunSettings) -> SimulationResult` returns aligned baseline, stressed and mitigated delivery tuples with statuses and replay metadata. Use shared node availability and mean-preserving lognormal transport samples, then apply stress and backup rules through the deterministic scenario layer. |
 | `src/scoring/` | `score(deliveries, deadline_hours) -> RiskMetrics` and `score_comparison(trials, deadline_hours) -> Comparison` score actual trial records. `rank_node_criticality(network, settings, candidate_ids=None) -> CriticalityReport` reports paired outage sensitivity, evaluated candidate IDs, and trial budget. |
-| `src/pipeline.py` | Compose computation and persistence through `compare(network: NetworkSnapshot, settings: RunSettings) -> Comparison`, `compare_and_save(repository: SQLiteRepository, ref: NetworkRef, settings: RunSettings) -> SavedRun`, and `replay_run(repository: SQLiteRepository, run_id: str) -> Comparison`. Replay uses the saved reference, settings, and algorithm version without mutating stored runs. Explicitly reject unsupported versions. |
+| `src/pipeline.py` | Compose computation and persistence through `compare(network: NetworkSnapshot, settings: RunSettings) -> Comparison`, `compare_and_save(repository: SQLiteRepository, ref: NetworkRef, settings: RunSettings) -> SavedRun`, and `replay_run(repository: SQLiteRepository, run_id: str) -> ReplayResult`. `compare_preset(repository, ref, preset_id, ...)` resolves stored defaults and accepts shipment and sigma overrides. Replay returns a typed `ReplayResult` with warnings, validates the saved snapshot fingerprint and environment, and checks exact trial, metric, and sensitivity equality. |
 | `src/cli.py` | Own arguments, user-facing output, exit status and repository lifecycle. The legacy `main.py` continues to run Phase 1. |
-| `src/utils/export.py` | Implement `export_run(run: SavedRun, destination: Path, format: Literal["json", "csv"]) -> None`. JSON contains full run metadata and results. CSV contains per-condition metrics with run and scenario settings, plus node criticality records with explicit row types. Include units and represent missing times as JSON null or empty CSV fields. |
+| `src/utils/export.py` | `export_run(run: SavedRun, destination: Path, *, overwrite: bool = False)` writes `summary.csv`, `trials.csv`, and strict `metadata.json` from persisted results. |
 
 ## Storage and fixture contracts
 
@@ -85,7 +85,13 @@ Map Phase 1 columns `supplier_id`, `lead_time`, `origin`, `destination`, and `ti
 - Stress impact is `100 * (stressed_on_time_rate - baseline_on_time_rate)`. Mitigation improvement is `100 * (mitigated_on_time_rate - stressed_on_time_rate)`. Both are percentage-point changes. Use `FRAGILITY_LABEL` when displaying the defined deadline-risk score.
 - Sensitivity evaluates up to eight candidates. By default choose the first eight transit IDs in ascending order. Accept an explicit tuple of up to eight unique transit IDs. Exclude origin and destination. Evaluate the first `min(run_trials, 500)` shared draws, once for the matching baseline and once per individual outage, without the intervention or backup from the main comparison. Rank by descending fragility increase, then ascending node ID. Stage 6 must disclose the exact evaluated IDs, trial budget and matching baseline fragility alongside the ranking.
 
-## Stage 6 CLI reservation
+## Stage 6 persistence and CLI
+
+Schema 3 adds preset sigma and complete run details. Each full run includes a
+canonical snapshot and SHA-256 fingerprint, environment and code provenance,
+three trial sets, the sensitivity report, and separate computation timings.
+The repository saves these details, settings, and metrics in one transaction.
+Summary-only records remain readable after migration.
 
 Invoke as `python -m src.cli [--db PATH] COMMAND`. The global `--db` option precedes the subcommand. Its default is `var/supply_chain.sqlite3` relative to the working directory.
 
@@ -94,10 +100,10 @@ Invoke as `python -m src.cli [--db PATH] COMMAND`. The global `--db` option prec
 | `init-db` | Create or migrate the local database. |
 | `seed-demo` | Save the validated, versioned demo fixture idempotently. |
 | `list-networks` | List saved network IDs and versions. |
-| `compare` | Select a network version and configure the shipment, disruption, backup and simulation. Save the comparison and print its run ID. |
-| `show-run RUN_ID` | Read saved settings and metrics. |
-| `replay-run RUN_ID` | Recompute with the stored snapshot, settings and supported algorithm version. |
-| `export-run RUN_ID --format {json,csv} --output PATH` | Export saved results to a user-selected file. |
+| `compare` | Use `--network demo-v1 --preset port-outage --seed 42 --trials 2000` with optional `--origin`, `--destination`, `--deadline-hours`, and `--sigma` overrides. Save the comparison and print its run ID. |
+| `show-run --run-id ID` | Read saved settings and metrics. |
+| `replay-run --run-id ID` | Recompute with the stored snapshot, settings and supported algorithm version. |
+| `export-run --run-id ID --output-dir DIR [--overwrite]` | Export saved results to a user-selected file. |
 
 ## Stages and completion gates
 
@@ -108,7 +114,7 @@ Invoke as `python -m src.cli [--db PATH] COMMAND`. The global `--db` option prec
 | 3. Deterministic scenarios | Apply node outages, directed closures, slowdown, absolute delay, and backup routes to directed routing. | Tests show exact path and hour calculations, single source readiness, rerouting, no-path semantics, stress retained with backup, and unchanged input snapshots. |
 | 4. Monte Carlo | Implement shared seeded draws, lognormal transport volatility, per-trial routing, and trial outcomes. | Tests prove reproducibility, aligned draws, boundary availability behavior, deterministic agreement with variation disabled, and explicit unserved deliveries. |
 | 5. Metrics and criticality | Compute outcome rates, fragility, delivered-only time statistics and transit-node ranking. | Hand-checkable tests cover mixed, all-delivered and all-unserved cases, deadline equality, percentile convention, and tied rankings. |
-| 6. Service, CLI, persistence, and exports | Compose comparison and replay, persist runs, add CLI commands and exports. | A CLI subprocess workflow against a temporary SQLite file exercises every command, reopens saved runs, replays after a newer snapshot exists and verifies both export formats. |
+| 6. Service, CLI, persistence, and exports | Compose comparison and replay, persist runs, add CLI commands and exports. | A CLI subprocess workflow against a temporary SQLite file exercises every command, reopens saved runs, replays after a newer snapshot exists and verifies the three-file CSV and JSON export bundle. |
 | 7. Final integration and handoff | Verify fresh setup and public workflows. Document setup, examples, storage, assumptions and limitations. | Full suite and pip check pass, Phase 1 and new end-to-end CLI workflows succeed from a fresh environment, and migration, replay, exports, and interface readiness are documented. |
 
 Every gate after Stage 1 also requires the full existing regression suite and the stage records.

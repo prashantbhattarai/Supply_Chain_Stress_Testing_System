@@ -1,12 +1,14 @@
 """Delivery metrics and measured transit-node sensitivity."""
 
-from dataclasses import dataclass
 from statistics import mean
 from typing import Optional
 
 import numpy as np
 
-from src.domain import Comparison, ConditionTrials, Criticality, Delivery, NetworkSnapshot, RiskMetrics, RunSettings
+from src.domain import (
+    Comparison, ConditionTrials, Criticality, CriticalityReport, Delivery,
+    NetworkSnapshot, RiskMetrics, RunSettings,
+)
 from src.simulation.monte_carlo import (
     MAX_SENSITIVITY_CANDIDATES, MAX_SENSITIVITY_TRIALS, sample_node_outages,
 )
@@ -57,14 +59,6 @@ def score_comparison(trials: ConditionTrials, deadline_hours: float) -> Comparis
         score(trials.mitigated, deadline_hours),
         (),
     )
-
-
-@dataclass(frozen=True)
-class CriticalityReport:
-    candidate_ids: tuple[int, ...]
-    trial_count: int
-    baseline_fragility: float
-    ranking: tuple[Criticality, ...]
 
 
 def rank_node_criticality(

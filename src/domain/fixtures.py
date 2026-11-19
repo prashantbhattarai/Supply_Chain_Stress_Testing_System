@@ -24,7 +24,7 @@ def _load_fixture(filename: str) -> tuple[NetworkSnapshot, ScenarioPreset]:
     shipment = Shipment(**preset["shipment"])
     scenario = Scenario(disruption, tuple(Edge(*route) for route in preset["backup_routes"]))
     validate_scenario(snapshot, shipment, scenario)
-    return snapshot, ScenarioPreset(preset["preset_id"], ref, shipment, scenario)
+    return snapshot, ScenarioPreset(preset["preset_id"], ref, shipment, scenario, preset["sigma"])
 
 
 def demo_network() -> NetworkSnapshot:
