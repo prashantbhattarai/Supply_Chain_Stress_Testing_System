@@ -114,7 +114,7 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(reopened.get_network(snapshot.ref), snapshot)
             self.assertEqual(reopened.get_preset(snapshot.ref, preset.preset_id), preset)
         with closing(sqlite3.connect(self.path)) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone(), (1,))
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone(), (2,))
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_immutable_versions_and_preset_round_trip(self):
@@ -188,6 +188,32 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT name FROM sqlite_master").fetchall(), [])
         self.repo.initialize()
         self.assertEqual(self.repo.list_networks(), ())
+
+    def test_migration_preserves_version_one_presets_and_backup_edges(self):
+        with patch("src.storage.MIGRATIONS", ("001_initial.sql",)):
+            self.repo.initialize()
+            self.repo.save_network(self.snapshot)
+            key = (self.snapshot.ref.network_id, self.snapshot.ref.version)
+            with self.repo._connection(write=True) as (connection, _):
+                connection.executemany(
+                    "INSERT INTO scenario_presets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(*key, "legacy-outage", 1, 10, 50, 4, None, None, None),
+                     (*key, "legacy-delay", 1, 10, 50, None, 3, 4, 5)],
+                )
+                connection.executemany(
+                    "INSERT INTO scenario_backup_routes VALUES (?, ?, ?, ?, ?, ?)",
+                    [(*key, preset_id, 8, 9, 10) for preset_id in ("legacy-outage", "legacy-delay")],
+                )
+        self.repo.initialize()
+        self.assertEqual(self.repo.get_network(self.snapshot.ref), self.snapshot)
+        self.assertEqual(self.repo.get_preset(self.snapshot.ref, "legacy-outage"),
+                         replace(self.preset, preset_id="legacy-outage"))
+        self.assertEqual(self.repo.get_preset(self.snapshot.ref, "legacy-delay"),
+                         replace(self.preset, preset_id="legacy-delay",
+                                 scenario=replace(self.preset.scenario, disruption=EdgeDelay(3, 4, 5))))
+        with self.repo._connection() as (connection, _):
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone(), (2,))
+            self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_foreign_database_is_preserved(self):
         with closing(sqlite3.connect(self.path)) as connection, connection:

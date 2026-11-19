@@ -8,12 +8,44 @@ from pathlib import Path
 
 from src.domain import (
     Comparison, Criticality, Edge, EdgeDelay, NetworkRef, NetworkSnapshot, Node,
-    NodeOutage, RiskMetrics, RunSettings, SavedRun, Scenario, ScenarioPreset,
-    Shipment, validate_scenario,
+    NodeOutage, RiskMetrics, RouteClosure, RunSettings, SavedRun, Scenario,
+    ScenarioPreset, Shipment, TransportSlowdown, validate_scenario,
 )
 
 APPLICATION_ID = 0x53435354
-MIGRATIONS = ("001_initial.sql",)
+MIGRATIONS = ("001_initial.sql", "002_disruptions.sql")
+
+
+def _shock_columns(shock):
+    if isinstance(shock, NodeOutage):
+        return "node_outage", shock.node_id, None, None, None, None
+    ends = (shock.origin_id, shock.destination_id)
+    if isinstance(shock, EdgeDelay):
+        return "edge_delay", None, *ends, shock.added_hours, None
+    if isinstance(shock, TransportSlowdown):
+        return "transport_slowdown", None, *ends, None, shock.factor
+    return "route_closure", None, *ends, None, None
+
+
+def _shock_from_columns(kind, node, origin, destination, hours, factor):
+    if kind == "node_outage":
+        return NodeOutage(node)
+    if kind == "edge_delay":
+        return EdgeDelay(origin, destination, hours)
+    if kind == "transport_slowdown":
+        return TransportSlowdown(origin, destination, factor)
+    if kind == "route_closure":
+        return RouteClosure(origin, destination)
+    raise ValueError(f"Unknown disruption kind: {kind}")
+
+
+def _shock_from_json(shock):
+    # The field sets distinguish each kind and preserve the schema 1 run format.
+    for field, kind in (("node_id", NodeOutage), ("added_hours", EdgeDelay),
+                        ("factor", TransportSlowdown)):
+        if field in shock:
+            return kind(**shock)
+    return RouteClosure(**shock)
 
 
 class SQLiteRepository:
@@ -122,13 +154,13 @@ class SQLiteRepository:
     def _get_preset(self, connection, ref, preset_id):
         key = (*self._network_key(ref), preset_id)
         row = connection.execute(
-            "SELECT origin_id, destination_id, deadline_hours, outage_node_id, "
-            "delay_origin_id, delay_destination_id, added_hours FROM scenario_presets "
+            "SELECT origin_id, destination_id, deadline_hours, disruption_kind, outage_node_id, "
+            "route_origin_id, route_destination_id, added_hours, slowdown_factor FROM scenario_presets "
             "WHERE network_id = ? AND version = ? AND preset_id = ?", key
         ).fetchone()
         if row is None:
             raise KeyError((ref, preset_id))
-        disruption = NodeOutage(row[3]) if row[3] is not None else EdgeDelay(*row[4:])
+        disruption = _shock_from_columns(*row[3:])
         edges = connection.execute(
             "SELECT origin_id, destination_id, transit_hours FROM scenario_backup_routes "
             "WHERE network_id = ? AND version = ? AND preset_id = ? ORDER BY origin_id, destination_id", key
@@ -144,14 +176,10 @@ class SQLiteRepository:
         except KeyError:
             key = (*self._network_key(preset.network), preset.preset_id)
             shipment = preset.shipment
-            shock = preset.scenario.disruption
-            if isinstance(shock, NodeOutage):
-                shock_values = (shock.node_id, None, None, None)
-            else:
-                shock_values = (None, shock.origin_id, shock.destination_id, shock.added_hours)
             connection.execute(
-                "INSERT INTO scenario_presets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (*key, shipment.origin_id, shipment.destination_id, shipment.deadline_hours, *shock_values),
+                "INSERT INTO scenario_presets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (*key, shipment.origin_id, shipment.destination_id, shipment.deadline_hours,
+                 *_shock_columns(preset.scenario.disruption)),
             )
             connection.executemany(
                 "INSERT INTO scenario_backup_routes VALUES (?, ?, ?, ?, ?, ?)",
@@ -206,7 +234,7 @@ class SQLiteRepository:
         settings = json.loads(row[2])
         scenario = settings["scenario"]
         shock = scenario["disruption"]
-        disruption = NodeOutage(**shock) if "node_id" in shock else EdgeDelay(**shock)
+        disruption = _shock_from_json(shock)
         settings["scenario"] = Scenario(disruption, tuple(Edge(**edge) for edge in scenario["backup_edges"]))
         settings["shipment"] = Shipment(**settings["shipment"])
         result = json.loads(row[3])

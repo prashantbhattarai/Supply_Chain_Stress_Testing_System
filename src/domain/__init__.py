@@ -3,7 +3,7 @@
 import math
 import sys
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 
 def _integer(value, label, minimum=-(2**63)):
@@ -142,12 +142,38 @@ class EdgeDelay:
 
 
 @dataclass(frozen=True)
+class RouteClosure:
+    origin_id: int
+    destination_id: int
+
+    def __post_init__(self):
+        _endpoints(self.origin_id, self.destination_id)
+
+
+@dataclass(frozen=True)
+class TransportSlowdown:
+    origin_id: int
+    destination_id: int
+    factor: float
+
+    def __post_init__(self):
+        _endpoints(self.origin_id, self.destination_id)
+        _number(self.factor, "slowdown factor")
+        if self.factor < 1:
+            raise ValueError("Slowdown factor must be at least 1")
+        object.__setattr__(self, "factor", float(self.factor))
+
+
+Disruption = Union[NodeOutage, EdgeDelay, RouteClosure, TransportSlowdown]
+
+
+@dataclass(frozen=True)
 class Scenario:
-    disruption: Union[NodeOutage, EdgeDelay]
+    disruption: Disruption
     backup_edges: tuple[Edge, ...]
 
     def __post_init__(self):
-        _record(self.disruption, (NodeOutage, EdgeDelay))
+        _record(self.disruption, (NodeOutage, EdgeDelay, RouteClosure, TransportSlowdown))
         _records(self.backup_edges, Edge)
         if not self.backup_edges or len({edge.endpoints for edge in self.backup_edges}) != len(self.backup_edges):
             raise ValueError("Provide one or more distinct backup routes")
@@ -168,7 +194,7 @@ def validate_scenario(network: NetworkSnapshot, shipment: Shipment, scenario: Sc
         if disruption.node_id not in ids:
             raise ValueError("Outage node must exist in the snapshot")
     elif (disruption.origin_id, disruption.destination_id) not in routes:
-        raise ValueError("Delayed edge must exist in the snapshot")
+        raise ValueError("Disrupted route must exist in the snapshot")
     for edge in scenario.backup_edges:
         if not ids.issuperset(edge.endpoints) or edge.endpoints in routes:
             raise ValueError("Backup must be a new route between existing nodes")
@@ -224,6 +250,13 @@ class Delivery:
         _number(self.end_to_end_hours, "end_to_end_hours")
         if self.end_to_end_hours < self.transit_hours:
             raise ValueError("End-to-end time must include transit")
+
+    def status(self, deadline_hours: float) -> Literal["on_time", "late", "unserved"]:
+        """Classify this outcome against an inclusive end-to-end deadline."""
+        _number(deadline_hours, "deadline_hours")
+        if self.end_to_end_hours is None:
+            return "unserved"
+        return "on_time" if self.end_to_end_hours <= deadline_hours else "late"
 
 
 @dataclass(frozen=True)
