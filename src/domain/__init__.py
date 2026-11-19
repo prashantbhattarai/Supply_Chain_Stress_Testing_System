@@ -214,14 +214,18 @@ class ScenarioPreset:
         _record(self.scenario, Scenario)
 
 
+MONTE_CARLO_VERSION = "lognormal-pcg64-v1"
+
+
 @dataclass(frozen=True)
 class RunSettings:
     shipment: Shipment
     scenario: Scenario
     trials: int
     seed: int
-    edge_jitter_fraction: float
-    algorithm_version: str
+    edge_jitter_fraction: float = 0.0
+    algorithm_version: str = MONTE_CARLO_VERSION
+    sigma: float = 0.0
 
     def __post_init__(self):
         _record(self.shipment, Shipment)
@@ -230,6 +234,7 @@ class RunSettings:
         _integer(self.seed, "seed", 0)
         _number(self.edge_jitter_fraction, "edge_jitter_fraction", 1)
         _name(self.algorithm_version, "algorithm_version")
+        _number(self.sigma, "sigma", 1)
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,7 @@ import networkx as nx
 import pandas as pd
 
 from src.domain import (
-    ConditionTrials, Delivery, Disruption, EdgeDelay, NetworkSnapshot,
+    ConditionTrials, Delivery, Disruption, Edge, EdgeDelay, NetworkSnapshot,
     NodeOutage, RouteClosure, Scenario, Shipment, TransportSlowdown,
     validate_scenario,
 )
@@ -29,11 +29,15 @@ def build_snapshot_graph(network: NetworkSnapshot) -> nx.DiGraph:
     return build_graph(routes, suppliers)
 
 
-def apply_disruption(baseline: nx.DiGraph, disruption: Disruption) -> nx.DiGraph:
-    """Copy the graph and apply one shock to the selected node or directed edge."""
+def apply_disruption(
+    baseline: nx.DiGraph, disruption: Disruption, *, allow_unavailable: bool = False,
+) -> nx.DiGraph:
+    """Apply a shock on a copy. A prevalidated target may already be unavailable."""
     stressed = baseline.copy()
     if isinstance(disruption, NodeOutage):
         if disruption.node_id not in stressed:
+            if allow_unavailable:
+                return stressed
             raise ValueError("Outage node must exist in the graph")
         stressed.remove_node(disruption.node_id)
         return stressed
@@ -42,6 +46,8 @@ def apply_disruption(baseline: nx.DiGraph, disruption: Disruption) -> nx.DiGraph
         raise ValueError("Unknown disruption type")
     origin, destination = disruption.origin_id, disruption.destination_id
     if not stressed.has_edge(origin, destination):
+        if allow_unavailable:
+            return stressed
         raise ValueError("Disrupted route must exist in the graph")
     if isinstance(disruption, RouteClosure):
         stressed.remove_edge(origin, destination)
@@ -67,15 +73,14 @@ def evaluate_delivery(graph: nx.DiGraph, shipment: Shipment) -> Delivery:
     return Delivery(path.path, path.total_time, readiness + path.total_time)
 
 
-def _mitigate(stressed: nx.DiGraph, scenario: Scenario) -> tuple[nx.DiGraph, set[tuple[int, int]]]:
+def add_backup_routes(stressed: nx.DiGraph, backup_edges: tuple[Edge, ...]) -> nx.DiGraph:
+    """Add prevalidated backup edges whose endpoints survived stress."""
     mitigated = stressed.copy()
-    added = set()
-    for edge in scenario.backup_edges:
+    for edge in backup_edges:
         origin, destination = edge.endpoints
         if origin in stressed and destination in stressed:
             mitigated.add_edge(origin, destination, time=edge.transit_hours)
-            added.add(edge.endpoints)
-    return mitigated, added
+    return mitigated
 
 
 def _uses_backup(path: tuple[int, ...], added: set[tuple[int, int]]) -> bool:
@@ -104,16 +109,25 @@ def _validate_backup(
     raise ValueError("Backup routes must add a shipment path under stress")
 
 
-def deterministic(network: NetworkSnapshot, shipment: Shipment, scenario: Scenario) -> ConditionTrials:
-    """Return one baseline, stressed, and mitigated delivery on independent graphs."""
+def prepare_scenario(
+    network: NetworkSnapshot, shipment: Shipment, scenario: Scenario,
+) -> tuple[nx.DiGraph, nx.DiGraph, nx.DiGraph]:
+    """Validate and build the three base graphs before evaluating outcomes."""
     validate_scenario(network, shipment, scenario)
     baseline = build_snapshot_graph(network)
     stressed = apply_disruption(baseline, scenario.disruption)
-    mitigated, added = _mitigate(stressed, scenario)
-    mitigated_delivery = evaluate_delivery(mitigated, shipment)
-    _validate_backup(mitigated, shipment, added, mitigated_delivery.path)
+    mitigated = add_backup_routes(stressed, scenario.backup_edges)
+    added = {edge.endpoints for edge in scenario.backup_edges if mitigated.has_edge(*edge.endpoints)}
+    fastest = shortest_path_metrics(mitigated, shipment.origin_id, shipment.destination_id)
+    _validate_backup(mitigated, shipment, added, fastest.path)
+    return baseline, stressed, mitigated
+
+
+def deterministic(network: NetworkSnapshot, shipment: Shipment, scenario: Scenario) -> ConditionTrials:
+    """Return one baseline, stressed, and mitigated delivery on independent graphs."""
+    baseline, stressed, mitigated = prepare_scenario(network, shipment, scenario)
     return ConditionTrials(
         (evaluate_delivery(baseline, shipment),),
         (evaluate_delivery(stressed, shipment),),
-        (mitigated_delivery,),
+        (evaluate_delivery(mitigated, shipment),),
     )
