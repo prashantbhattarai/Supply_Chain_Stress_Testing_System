@@ -7,13 +7,14 @@ example remains available through `python main.py`.
 
 ## Setup and run
 
-From the repository root, use Python 3.9 or later:
+From the repository root, use the tested Python 3.9.6 interpreter. See [Backend demo and handoff](BACKEND_DEMO.md) for the tested platform, pinned dependencies, and replay requirements.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 python main.py
+python -m pip check
 python -m unittest discover -s tests -v
 ```
 
@@ -41,9 +42,9 @@ python -m src.cli replay-run --run-id "$run_id"
 python -m src.cli export-run --run-id "$run_id" --output-dir "exports/$run_id"
 ```
 
-The default database is `var/supply_chain.sqlite3`. Use the global `--db PATH`
+The default database is `var/supply_chain.sqlite3`. The current schema is version 3. Use the global `--db PATH`
 before the subcommand to select another database. `init-db` creates or migrates
-the database, and `seed-demo` is safe to repeat. `demo-v1` aliases the stored
+the database transactionally, and `seed-demo` is safe to repeat. Keep an SQLite backup before upgrading a database you rely on. Saved runs carry their original snapshot even after a newer version is added. `demo-v1` aliases the stored
 `coastal-demo-v1` snapshot.
 
 The coastal `port-outage` preset uses origin 1, destination 10, a 50-hour deadline,
@@ -52,7 +53,7 @@ and lognormal volatility sigma 0.15. Override these with `--origin`,
 supports up to 25 nodes, 60 directed routes including backups, 10,000 trials,
 and sigma in [0, 1]. Node failures and route times are independent background
 draws. Routing has full knowledge of the sampled conditions. Simulation adds
-source readiness in hours once. Its fragility metric is the percentage of all
+source readiness in hours once. This synthetic model covers one shipment at a time and assumes no inventory, capacity, or correlated regional failures. Its fragility metric is the percentage of all
 trials that are late or unserved.
 
 Replay uses the run's embedded snapshot, seed, settings, and model version.
@@ -68,6 +69,15 @@ includes outcomes and counts, hours, run inputs, environment and snapshot
 details, and the sensitivity candidate and trial budget. Unserved trials have
 blank path and hour fields in CSV. Missing summary times are JSON null.
 Specify `--overwrite` to replace an existing export bundle.
+
+## Backend integration
+
+Call `src.pipeline.compare_preset` or `compare_and_save` with a
+`SQLiteRepository` to get a typed `SavedRun`. Read an existing run with
+`repository.get_run(run_id)`, verify it through `src.pipeline.replay_run`,
+and export through `src.utils.export.export_run`. The service functions
+return records without printing. See [Backend demo and handoff](BACKEND_DEMO.md)
+for the stable functions, result fields, and error behavior.
 
 ## Phase 1 data and graph rules
 

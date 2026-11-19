@@ -43,6 +43,8 @@ def code_state() -> tuple[Optional[str], Optional[bool]]:
         ).strip()
 
     try:
+        if Path(git("rev-parse", "--show-toplevel")).resolve() != root:
+            return None, None
         revision = git("rev-parse", "HEAD")
     except (OSError, subprocess.SubprocessError):
         return None, None

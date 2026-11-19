@@ -1,60 +1,71 @@
 # Backend foundation status
 
-**Stage 6 of 7, persistent backend workflow, completed and verified.** Stage 7 and interface work have not started.
+**BACKEND_READY_FOR_UI**
 
-## Branch and prerequisite
+Stage 7 completed the backend release gate. Interface implementation has not started.
 
-- Worktree `/private/tmp/supply-chain-foundation-backend`, branch `foundation-backend`, Stage 6 base `d8ebd76ca0a2d0e86d294fd311e5f344121da10a`. The worktree started clean and no applicable AGENTS.md was found.
-- `git rev-parse HEAD` and `git ls-remote origin refs/heads/foundation-backend` matched at the Stage 5 base. All 58 prerequisite tests passed, along with the original CLI and pip check.
+## Stage status
 
-## Stage checklist and changed files
+| Stage | Verified status |
+| --- | --- |
+| 1. Baseline and contracts | Complete. Phase 1 CLI and 17 original tests verified. |
+| 2. Domain, storage, and fixtures | Complete. Validated fixtures, immutable network versions through the repository, and transactional SQLite verified. |
+| 3. Deterministic scenarios | Complete. Directed disruption routing, backup behavior, and day/hour conversion verified. |
+| 4. Monte Carlo | Complete. Aligned seeded draws, unserved outcomes, and workload limits verified. |
+| 5. Risk and criticality | Complete. All-trial rate denominators, delivered-only times, percentage-point deltas, and paired sensitivity verified. |
+| 6. Backend workflow | Complete. Service, SQLite persistence, replay and CLI exports verified. |
+| 7. Foundation handoff | Complete. Fresh-environment checks, full temporary database workflow, artifact audit, and integration documentation verified. |
 
-- [x] Compose the service in `src/pipeline.py`. It resolves a saved network and preset, applies explicit overrides, simulates the three conditions, scores trials, times comparison and sensitivity separately, and persists a typed result. Replay verifies exact trials, metrics and criticality using stored inputs.
-- [x] Store complete runs atomically. `src/storage/003_run_details.sql` migrates schema 2 to **schema 3**, adding validated preset sigma and a `run_details` table tied to `run_results`. `src/storage/__init__.py` and `src/storage/run_details.py` persist and decode the complete snapshot, SHA-256 fingerprint, scenario settings, seed, runtime and code provenance, sensitivity, and all trial outcomes. Older summary-only runs remain readable. The full-run rollback test injects failure on the final insert and checks that all three run tables stay empty.
-- [x] Add typed records in `src/domain/__init__.py` and reuse them in `src/scoring/__init__.py`. `src/domain/fixtures.py` and `data/fixtures/{demo,tiny}.json` validate and expose the saved volatility default of 0.15.
-- [x] Implement all seven CLI commands in `src/cli.py`. `src/utils/export.py` writes `summary.csv`, `trials.csv`, and strict `metadata.json` with run settings, units, and sensitivity disclosure. Existing export files require `--overwrite`.
-- [x] Test subprocess reopen, replay, rollback, saved snapshot interpretation after adding a new version, invalid requests, version mismatch, fingerprint corruption, and export fidelity. `tests/test_backend_workflow.py` adds six tests and `tests/test_storage.py` verifies the new schema version.
-- [x] Update `README.md`, `FOUNDATION_PLAN.md`, `summary.md`, and `docs/progress/06-backend-workflow.md`.
+## Branch, audit, and changes
 
-## Verified temporary database run
+- Worktree `/private/tmp/supply-chain-foundation-backend`, branch `foundation-backend`, started clean at Stage 6 commit `fa7d14b2798de8f82e871e6703133905e3a2d3f1`. GitHub returned the same SHA. No applicable AGENTS.md was found. The existing environment passed all 64 Stage 6 tests, pip check, the original CLI, and CLI help.
+- [x] Audited validation, units, constraints, migrations, reseeding, rollback, versioned snapshots, directed routing and scenario copies, paired samples, workload limits, outcome denominators, scoring, criticality, persistence, replay, exports, and CLI errors against the implementation and tests.
+- [x] Fixed an integrity gap in `src/storage/__init__.py`. Direct callers can no longer save a full run whose summary disagrees with its trial records. `src/pipeline.py` now checks the Git root before recording code provenance, so an archive nested in another repository cannot inherit its revision.
+- [x] Added two targeted regressions to `tests/test_backend_workflow.py` for inconsistent run rejection and fixture loading from another directory. Reused existing migration, rollback, routing, replay and export tests.
+- [x] Audited tracked files and credential markers. No databases, sidecars, virtual environments, generated exports, or recognized credential files or key markers were found. The Phase 1 commit remains one ancestor in the branch, and the original Phase 1 CLI, graph builder, shortest-path implementation, and test file match `f780cee`.
+- [x] Completed `README.md`, `FOUNDATION_PLAN.md`, `BACKEND_DEMO.md`, `summary.md`, and `docs/progress/07-foundation-handoff.md`.
+- SQLite schema remains version 3. Stage 7 adds no migration. The demo returned `integrity_check = ok` and an empty `foreign_key_check`.
 
-Commands ran under `source .venv/bin/activate` from the stage worktree. The temp directory was created with `mktemp -d /private/tmp/supply-stage6.XXXXXX`. Each CLI invocation opened and closed SQLite independently.
+## Fresh environment checks
+
+Used a clean source copy at `/private/tmp/supply-stage7.XowkJH/source`, created with `git archive HEAD | tar -x` plus the three scoped Stage 7 Python files. There was no Git metadata or existing runtime data in the source copy.
+
+Ran `python3 -m venv .venv` and `source .venv/bin/activate`. A sandboxed package-index attempt failed. With network approval, `python -m pip install --disable-pip-version-check -r requirements.txt` installed all 17 pins. The platform was macOS 26.6.2 (Darwin 25.6.0), arm64, with Python 3.9.6, SQLite 3.51.0, NumPy 2.0.2, pandas 2.3.3, and NetworkX 3.2.1.
+
+| Command | Actual result |
+| --- | --- |
+| `python -m pip check` | Exit 0. No broken requirements found. |
+| `python -m unittest discover -s tests -v` | Exit 0. All 66 tests passed in 22.255 s. |
+| `python main.py` | Exit 0. 20 suppliers, 80 routes, 20 nodes and 72 edges. Shortest route `1 -> 20` took 14 transit hours. |
+| `python -m src.cli --help` | Exit 0. Help listed all seven commands and the default database. |
+| `git diff --check` | Exit 0. No whitespace errors. |
+
+## Verified temporary database demo
 
 ```sh
-db=/private/tmp/supply-stage6.uDyrGG/supply_chain.sqlite3
+db=/private/tmp/supply-demo7.83NJ6j/demo.sqlite3
 python -m src.cli --db "$db" init-db
+python -m src.cli --db "$db" seed-demo
 python -m src.cli --db "$db" seed-demo
 python -m src.cli --db "$db" list-networks
 python -m src.cli --db "$db" compare --network demo-v1 --preset port-outage --seed 42 --trials 2000
-python -m src.cli --db "$db" show-run --run-id 93935b84-822d-44b3-9ab9-7ef2eb282860
-python -m src.cli --db "$db" replay-run --run-id 93935b84-822d-44b3-9ab9-7ef2eb282860
-python -m src.cli --db "$db" export-run --run-id 93935b84-822d-44b3-9ab9-7ef2eb282860 --output-dir /private/tmp/supply-stage6.uDyrGG/export
+python -m src.cli --db "$db" show-run --run-id 604a2568-56a8-4e5f-bbd0-399fd70e0139
+python -m src.cli --db "$db" replay-run --run-id 604a2568-56a8-4e5f-bbd0-399fd70e0139
+python -m src.cli --db "$db" export-run --run-id 604a2568-56a8-4e5f-bbd0-399fd70e0139 --output-dir /private/tmp/supply-demo7.83NJ6j/export
 ```
 
-All workflow commands exited 0. Listing showed `coastal-demo-v1` (alias `demo-v1`) and `tiny-v1`. Reopened output matched the original comparison exactly. Replay verified the run, and the export had 3 summary rows and 6,000 trial rows, excluding headers.
+Every command exited 0. The list contained `coastal-demo-v1` (alias `demo-v1`) and `tiny-v1`. The separately opened run matched the compare output exactly. Replay verified the 2,000 trials per condition. Exports contained three summary rows and 6,000 trial rows. From the temporary database directory, importing `bundled_fixtures()` with the clean source on `PYTHONPATH` loaded the 11-node and four-node fixtures by their preset IDs.
 
-The run used Python 3.9.6, NumPy 2.0.2, pandas 2.3.3, NetworkX 3.2.1, and model `lognormal-pcg64-v1`. Its code revision was the Stage 5 base, with `code_dirty=true` because this check ran before the Stage 6 commit. The shipment was 1 → 10 at a 50-hour deadline and sigma 0.15. Comparison took **0.387382 s**, and criticality took **0.271008 s**. These timings exclude persistence and CLI startup.
-
-| Condition | On time | Late | Unserved | Fragility | Delivered mean | Delivered P95 |
+| Condition | On time | Late | Unserved | Fragility | Mean delivered | P95 delivered |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Baseline | 1747 | 144 | 109 | 12.65 | 43.621 h | 61.885 h |
-| Stressed | 0 | 1797 | 203 | 100.00 | 62.959 h | 68.182 h |
-| Mitigated | 1824 | 74 | 102 | 8.80 | 45.505 h | 49.319 h |
+| Baseline | 1747 (87.35%) | 144 | 109 | 12.65 | 43.621 h | 61.885 h |
+| Stressed | 0 (0%) | 1797 | 203 | 100.00 | 62.959 h | 68.182 h |
+| Mitigated | 1824 (91.20%) | 74 | 102 | 8.80 | 45.505 h | 49.319 h |
 
-Stress impact was −87.35 percentage points and mitigation improvement was +91.20 percentage points. Sensitivity used candidate IDs 2 through 9 and 500 trials. Matching baseline fragility was 14.80. Nodes 3, 4, 5, and 9 tied at +85.20 points in ascending ID order. Nodes 2, 6, 7, and 8 tied at zero.
+Comparison took 0.390780 s and criticality took 0.285374 s. Criticality used nodes 2–9 and 500 matched trials with baseline fragility 14.80. The archive had no Git metadata, so replay reported unavailable code provenance and still verified exact results.
 
-## Regression checks
+## Limitations and handoff
 
-| Command | Verified result |
-| --- | --- |
-| `python -m unittest tests.test_backend_workflow -v` | Exit 0, 6 tests passed. |
-| `python -m unittest discover -s tests -v` | Exit 0, all 64 tests passed. |
-| `python main.py` | Exit 0, route `1 -> 20` took 14 transit hours. |
-| `python -m pip check` | Exit 0, no broken requirements. The sandbox disabled the pip cache. |
-| `git diff --check` | Exit 0, no whitespace errors. |
+Python 3.12, other platforms, and cross-version reproducibility remain unverified. Verify another interpreter with a separate virtual environment, pinned installation, the four release commands, and the temporary database workflow. Dense backup validation has not been benchmarked. The model is synthetic, uses independent background draws and optimistic rerouting, and tracks one shipment. Legacy summary-only runs lack trial data for replay and full export.
 
-## Remaining work and next gate
-
-Python 3.12 and cross-version reproducibility remain unverified. Replay reports incompatible versions and flags differing or dirty code provenance. A Git SHA and dirty flag cannot reconstruct uncommitted source. To check Python 3.12, create `python3.12 -m venv .venv-py312`, install the pinned requirements, and rerun the legacy CLI, backend workflow, full suite, and pip check.
-
-Stage 7 remains. Its gate requires a fresh environment, full tests and dependency checks, both entry points, and a documented migration, replay, export and handoff workflow. The backend is not yet ready for interface work under the foundation plan.
+No foundation stages remain. A future interface can use the stable Python entry points and typed records documented in `BACKEND_DEMO.md`. Interface implementation needs its own scope.

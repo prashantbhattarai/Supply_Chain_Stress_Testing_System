@@ -3,7 +3,7 @@
 import json
 import sqlite3
 from contextlib import closing, contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from src.domain import (
@@ -12,6 +12,7 @@ from src.domain import (
     ScenarioPreset, Shipment, TransportSlowdown, validate_scenario,
 )
 
+from src.scoring import score_comparison
 from src.storage.run_details import decode_details
 
 APPLICATION_ID = 0x53435354
@@ -209,6 +210,10 @@ class SQLiteRepository:
                 self._save_preset(connection, preset)
 
     def save_run(self, run: SavedRun) -> None:
+        if run.details is not None:
+            scored = score_comparison(run.details.trials, run.settings.shipment.deadline_hours)
+            if replace(scored, node_criticality=run.details.criticality.ranking) != run.result:
+                raise ValueError("Run summaries do not match its trial records")
         with self._connection(write=True) as (connection, _):
             snapshot = self._get_network(connection, run.network)
             validate_scenario(snapshot, run.settings.shipment, run.settings.scenario)

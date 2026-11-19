@@ -63,7 +63,7 @@ Map Phase 1 columns `supplier_id`, `lead_time`, `origin`, `destination`, and `ti
 
 ## Storage and fixture contracts
 
-- `ScenarioPreset(preset_id: str, network: NetworkRef, shipment: Shipment, scenario: Scenario)` names a scenario on a specific network version. Use `save_preset(preset: ScenarioPreset) -> None` and `get_preset(ref: NetworkRef, preset_id: str) -> ScenarioPreset`. Use `seed(fixtures: tuple[tuple[NetworkSnapshot, ScenarioPreset], ...]) -> None` with `src.domain.fixtures.bundled_fixtures()` to seed both bundles atomically.
+- `ScenarioPreset(preset_id: str, network: NetworkRef, shipment: Shipment, scenario: Scenario, sigma: float = 0.15)` names a scenario on a specific network version. Use `save_preset(preset: ScenarioPreset) -> None` and `get_preset(ref: NetworkRef, preset_id: str) -> ScenarioPreset`. Use `seed(fixtures: tuple[tuple[NetworkSnapshot, ScenarioPreset], ...]) -> None` with `src.domain.fixtures.bundled_fixtures()` to seed both bundles atomically.
 - Schema 2 retains the tables from schema 1 and adds a checked disruption kind and slowdown factor to scenario presets. It migrates existing outage and absolute-delay presets and preserves their backup routes. It uses `networks`, `nodes`, `routes`, `scenario_presets`, `scenario_backup_routes`, `runs`, and `run_results`. Network versions are identified by `(network_id, version)`. Node and route references for networks and presets are scoped by both columns. Run settings and results are stored as typed JSON payloads, validated by the repository, with a foreign key from each run to its network version and from its result to the run.
 - The demo JSON under `data/fixtures/` uses route triples in origin, destination, hours order. The coastal port outage preset has a 50-hour deadline. With background conditions disabled, the port route takes 42 hours including source readiness, the inland route takes 63 hours, and the separate backup via the ferry terminal takes 45 hours. The tiny fixture gives 29, 36, and 32 hours with a 32-hour deadline.
 
@@ -91,7 +91,7 @@ Schema 3 adds preset sigma and complete run details. Each full run includes a
 canonical snapshot and SHA-256 fingerprint, environment and code provenance,
 three trial sets, the sensitivity report, and separate computation timings.
 The repository saves these details, settings, and metrics in one transaction.
-Summary-only records remain readable after migration.
+Summary-only records remain readable after migration. The repository validates complete summaries against their trial records before writing.
 
 Invoke as `python -m src.cli [--db PATH] COMMAND`. The global `--db` option precedes the subcommand. Its default is `var/supply_chain.sqlite3` relative to the working directory.
 
@@ -118,3 +118,13 @@ Invoke as `python -m src.cli [--db PATH] COMMAND`. The global `--db` option prec
 | 7. Final integration and handoff | Verify fresh setup and public workflows. Document setup, examples, storage, assumptions and limitations. | Full suite and pip check pass, Phase 1 and new end-to-end CLI workflows succeed from a fresh environment, and migration, replay, exports, and interface readiness are documented. |
 
 Every gate after Stage 1 also requires the full existing regression suite and the stage records.
+
+## Stage 7 handoff
+
+Use the setup commands in [README](README.md) and the temporary-database
+example and service contracts in [Backend demo and handoff](BACKEND_DEMO.md).
+The release checks use a clean source copy and a fresh environment with the
+pinned requirements. The tested interpreter and platform, acceptance results,
+and readiness verdict are recorded in [summary.md](summary.md). Future callers
+use typed service results and repository methods. They can create new network
+versions without changing a saved run's interpretation.

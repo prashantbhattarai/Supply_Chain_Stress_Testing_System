@@ -2,6 +2,7 @@
 
 import csv
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -99,6 +100,29 @@ class BackendWorkflowTests(unittest.TestCase):
         self.assertIn("already exists", self.cli(*export, succeeds=False).stderr)
         self.assertEqual((output / "summary.csv").read_bytes(), original)
         self.cli(*export, "--overwrite")
+
+    def test_fixtures_load_from_another_working_directory(self):
+        root = Path(__file__).resolve().parents[1]
+        self.repository.initialize()
+        result = subprocess.run(
+            [sys.executable, "-m", "src.cli", "--db", str(self.db), "seed-demo"],
+            cwd=self.directory, env={**os.environ, "PYTHONPATH": str(root)},
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.repository.list_networks(), (NetworkRef("coastal-demo", 1), NetworkRef("tiny", 1)))
+
+    def test_rejects_complete_run_with_mismatched_summary(self):
+        self.repository.initialize()
+        self.cli("seed-demo")
+        run = compare_preset(self.repository, NetworkRef("tiny", 1), "port-outage", trials=3, sigma=0)
+        inconsistent = replace(run, run_id="bad-summary", result=replace(
+            run.result, baseline=run.result.stressed,
+        ))
+        with self.assertRaisesRegex(ValueError, "summaries do not match"):
+            self.repository.save_run(inconsistent)
+        with self.assertRaises(KeyError):
+            self.repository.get_run(inconsistent.run_id)
 
     def test_invalid_cli_requests_have_clear_errors(self):
         self.assertIn("--db", self.cli("--help").stdout)
