@@ -310,6 +310,10 @@ class RiskMetrics:
             elif hours is not None:
                 raise ValueError("All-unserved metrics must omit delivered times")
 
+    @property
+    def delivered_count(self) -> int:
+        return self.on_time_count + self.late_count
+
 
 @dataclass(frozen=True)
 class Criticality:
@@ -331,9 +335,21 @@ class Comparison:
     def __post_init__(self):
         for metrics in (self.baseline, self.stressed, self.mitigated):
             _record(metrics, RiskMetrics)
+        if not self.baseline.trial_count == self.stressed.trial_count == self.mitigated.trial_count:
+            raise ValueError("Comparison conditions must have the same trial count")
         _records(self.node_criticality, Criticality)
         if len({item.node_id for item in self.node_criticality}) != len(self.node_criticality):
             raise ValueError("Duplicate criticality node")
+
+    @property
+    def stress_impact(self) -> float:
+        """Change in on-time rate from baseline to stress, in percentage points."""
+        return 100 * (self.stressed.on_time_count - self.baseline.on_time_count) / self.baseline.trial_count
+
+    @property
+    def mitigation_improvement(self) -> float:
+        """Change in on-time rate from stress to mitigation, in percentage points."""
+        return 100 * (self.mitigated.on_time_count - self.stressed.on_time_count) / self.stressed.trial_count
 
 
 @dataclass(frozen=True)

@@ -6,7 +6,7 @@ an optimistic rerouting assumption.
 """
 
 import platform
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import networkx as nx
@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from src.domain import (
-    MONTE_CARLO_VERSION, ConditionTrials, Delivery, Edge, NetworkRef,
+    MONTE_CARLO_VERSION, ConditionTrials, Delivery, Edge, NetworkRef, NodeOutage,
     NetworkSnapshot, RunSettings,
 )
 from src.graph.scenarios import add_backup_routes, apply_disruption, evaluate_delivery, prepare_scenario
@@ -22,6 +22,8 @@ from src.graph.scenarios import add_backup_routes, apply_disruption, evaluate_de
 MAX_NODES = 25
 MAX_EDGES = 60
 MAX_TRIALS = 10_000
+MAX_SENSITIVITY_CANDIDATES = 8
+MAX_SENSITIVITY_TRIALS = 500
 Outcome = Literal["on_time", "late", "unserved"]
 
 
@@ -96,13 +98,18 @@ def _validate_workload(network: NetworkSnapshot, settings: RunSettings) -> None:
         raise ValueError("Unsupported simulation algorithm or legacy jitter setting")
 
 
-def _trial_graphs(
-    baseline: nx.DiGraph, settings: RunSettings, samples: _TrialSamples, trial: int,
-) -> dict[str, nx.DiGraph]:
+def _available_graph(baseline: nx.DiGraph, samples: _TrialSamples, trial: int) -> nx.DiGraph:
     available = baseline.copy()
     available.remove_nodes_from(node for node, draws in samples.availability.items() if not draws[trial])
     for origin, destination, data in available.edges(data=True):
         data["time"] = float(samples.transport_hours[origin, destination][trial])
+    return available
+
+
+def _trial_graphs(
+    baseline: nx.DiGraph, settings: RunSettings, samples: _TrialSamples, trial: int,
+) -> dict[str, nx.DiGraph]:
+    available = _available_graph(baseline, samples, trial)
     stressed = apply_disruption(available, settings.scenario.disruption, allow_unavailable=True)
     backup = tuple(
         Edge(*edge.endpoints, float(samples.transport_hours[edge.endpoints][trial]))
@@ -132,3 +139,33 @@ def simulate(network: NetworkSnapshot, settings: RunSettings) -> SimulationResul
             pd.__version__, nx.__version__,
         ),
     )
+
+
+
+def sample_node_outages(
+    network: NetworkSnapshot, settings: RunSettings, candidate_ids: tuple[int, ...], trial_count: int,
+) -> tuple[tuple[Delivery, ...], dict[int, tuple[Delivery, ...]]]:
+    """Evaluate single-node outages on a prefix of the original baseline samples."""
+    _validate_workload(network, settings)
+    if type(trial_count) is not int or not 1 <= trial_count <= min(settings.trials, MAX_SENSITIVITY_TRIALS):
+        raise ValueError("Sensitivity trials must be within the run and sensitivity trial budgets")
+    if not isinstance(candidate_ids, tuple) or len(candidate_ids) > MAX_SENSITIVITY_CANDIDATES:
+        raise ValueError(f"Provide a tuple of at most {MAX_SENSITIVITY_CANDIDATES} transit node IDs")
+    baseline, _, _ = prepare_scenario(network, settings.shipment, settings.scenario)
+    shipment = settings.shipment
+    transit_ids = set(baseline) - {shipment.origin_id, shipment.destination_id}
+    if any(type(node_id) is not int or node_id not in transit_ids for node_id in candidate_ids):
+        raise ValueError("Sensitivity candidates must be transit nodes")
+    if len(set(candidate_ids)) != len(candidate_ids):
+        raise ValueError("Sensitivity candidates must be unique")
+    samples = _samples(network, replace(settings, trials=trial_count))
+    matching_baseline = []
+    outcomes: dict[int, list[Delivery]] = {node_id: [] for node_id in candidate_ids}
+    outages = tuple(NodeOutage(node_id) for node_id in candidate_ids)
+    for trial in range(trial_count):
+        available = _available_graph(baseline, samples, trial)
+        matching_baseline.append(evaluate_delivery(available, shipment))
+        for outage in outages:
+            disrupted = apply_disruption(available, outage, allow_unavailable=True)
+            outcomes[outage.node_id].append(evaluate_delivery(disrupted, shipment))
+    return tuple(matching_baseline), {node_id: tuple(deliveries) for node_id, deliveries in outcomes.items()}
